@@ -40,12 +40,20 @@ C Manual
 
 >> A3: Why does Pintos implement strtok_r() but not strtok()?
 
-Unlike strtok_r(), strtok() is not a safe function for multi-thread
-programming. If a context switch were to occur during a call to 
-strtok(), a race condition would create ambiguity as to what
-virtual address space, kernel or user, the target string argument 
-pointer attempts to access, which may not even point to a character 
-or string.
+The function strtok() is not reliable when dealing with multiple
+processes or threads. Unlike strtok_r(), which maintains a pointer 
+to the target memory address for reference in each function call, 
+strtok() assumes the target string for every call it receives with
+a null pointer is that of the last non-null pointer. If a thread 
+makes an initial call to strtok() with a non-null pointer at the time 
+another thread is between successive calls to strtok(), then all 
+calls to strtok() from the first calling thread will pass to whatever
+address the second thread specified, but in its own virtual memory
+space, which could possibly not point to a character. Both of these 
+functions should be handled with care, though. If a context 
+switch were to occur during a call to either function, a race 
+condition would create ambiguity as to what virtual address space, 
+kernel or user, the target string argument pointer attempts to access.
 
 >> A4: In Pintos, the kernel separates commands into a executable name
 >> and arguments.  In Unix-like systems, the shell does this

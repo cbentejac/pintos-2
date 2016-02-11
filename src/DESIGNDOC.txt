@@ -19,6 +19,7 @@ FirstName LastName <email@ucr.edu>
 >> Please cite any offline or online sources you consulted while
 >> preparing your submission, other than the Pintos documentation, course
 >> text, lecture notes, and course staff.
+C Manual
 
 			   ARGUMENT PASSING
 			   ================
@@ -38,6 +39,13 @@ FirstName LastName <email@ucr.edu>
 ---- RATIONALE ----
 
 >> A3: Why does Pintos implement strtok_r() but not strtok()?
+
+Unlike strtok_r(), strtok() is not a safe function for multi-thread
+programming. If a context switch were to occur during a call to 
+strtok(), a race condition would create ambiguity as to what
+virtual address space, kernel or user, the target string argument 
+pointer attempts to access, which may not even point to a character 
+or string.
 
 >> A4: In Pintos, the kernel separates commands into a executable name
 >> and arguments.  In Unix-like systems, the shell does this

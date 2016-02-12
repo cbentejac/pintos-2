@@ -8,8 +8,8 @@
 
 >> Fill in the names and email addresses of your group members.
 
-FirstName LastName <email@ucr.edu>
-FirstName LastName <email@ucr.edu>
+Erin Mullally <emull005@ucr.edu> <860854551>
+Candice Bentejac <cbent002@ucr.edu> <861246425>
 
 ---- PRELIMINARIES ----
 
@@ -30,11 +30,33 @@ C Manual
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+No struct or struct member, global or static variable has been declared
+or modified. 
+(Only the prototypes of load and setup_stack have been modified.)
+
+
 ---- ALGORITHMS ----
 
 >> A2: Briefly describe how you implemented argument parsing.  How do
 >> you arrange for the elements of argv[] to be in the right order?
 >> How do you avoid overflowing the stack page?
+
+==> Algorithm
+Argument parsing has been implemented in the setup_stack function.
+We first tokenize the command line from left to right using strtok_r() 
+and push each word at the top of the stack (at that point, we don't 
+care about the order). While pushing to the stack, we also save each 
+token's address in our dynamically allocated array argv[]. If needed 
+(that is to say, if argv is full), we dynamically resize it. We also ensure 
+that argv[argc], the last element of argv[], is a null pointer. We then 
+word-align the stack pointer, in order to provide a faster access to addresses. 
+Once the stack pointer is word-aligned, we push the content of argv (addresses 
+pointing to tokens obtained with strtok_r()) to the stack in reverse order: the
+last argument of the command line will thus be the first one to be pushed to the
+stack (as the command line has been parsed from left to right, pushing from right
+to left is easy). We then push argv (argv[0] address), argc, and a fake return 
+address before freeing argv[].
+
 
 ---- RATIONALE ----
 
@@ -59,6 +81,10 @@ kernel or user, the target string argument pointer attempts to access.
 >> and arguments.  In Unix-like systems, the shell does this
 >> separation.  Identify at least two advantages of the Unix approach.
 
+The shell parses the command line by itself and checks it before passing 
+it to the kernel. The kernel doesn't have to parse the command itself
+and is thus more protected, since it is not likely that it will receive garbage.
+
 			     SYSTEM CALLS
 			     ============
 
@@ -68,14 +94,72 @@ kernel or user, the target string argument pointer attempts to access.
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+Added in syscall.h:
+Child process represents the child of a process and contains information
+such as the PID of a process, its loading status, etc.
+  /* Child process. */
+  struct child_process 
+  {
+    int pid;			/* Process ID. */
+    int load_status		/* Not loaded or un/successfully loaded. */
+    int status;			/* Execution status. */
+    bool wait;			/* Waiting? */
+    bool exit;			/* Exiting?
+    struct lock wait_lock;	/* Lock for waiting. */
+    struct list_elem elem;      /* List manipulation. */
+  };
+ 
+Lock used to avoid race conditions during the file system system calls.
+  struct lock sys_lock;
+  
+Process file contains the file(s) associated with a process. Contains
+the struct file and the file descriptor.
+  /* Process file. */
+  struct process_file
+  {
+    struct file *f;		/* File structure. */
+    int *fd;			/* File descriptor. */
+    struct list_elem elem;	/* List manipulation. */
+  };
+ 
+ 
+Added in thread.h:
+List that keeps track of the different files manipulated by the thread.
+  struct list file_list;
+  
+Thread's file descriptor.
+  int fd;
+  
+List of the thread's child processes.
+  struct list children_list;
+  
+Pointer that indicates the current running child process.
+  struct child_process *cp;
+  
+Thread ID of the thread's parent.
+  tid_t parent;
+
 >> B2: Describe how file descriptors are associated with open files.
 >> Are file descriptors unique within the entire OS or just within a
 >> single process?
+
+Everytime a file is opened, we use a function "add_file" that increments
+the current thread's file descriptor.
+File descriptors are unique within a single process: each process has
+its own file descriptor. 
 
 ---- ALGORITHMS ----
 
 >> B3: Describe your code for reading and writing user data from the
 >> kernel.
+
+We must check that the stack pointer's address is in the user space:
+if it is, we can dereference it; it is not, we use the exit system
+call. The user space address is then converted to a kernel space 
+address and we can procede with the reading or the writing.
+
+In our implementation, a function "user_to_kernel_ptr" is used to 
+check the pointer's address and convert it.
 
 >> B4: Suppose a system call causes a full page (4,096 bytes) of data
 >> to be copied from user space into the kernel.  What is the least
@@ -84,8 +168,20 @@ kernel or user, the target string argument pointer attempts to access.
 >> for a system call that only copies 2 bytes of data?  Is there room
 >> for improvement in these numbers, and how much?
 
+
+
 >> B5: Briefly describe your implementation of the "wait" system call
 >> and how it interacts with process termination.
+
+The "wait" system call calls "process_wait (pid)", which is defined in
+process.c. In this function, we use the PID given in parameter to
+find the associated child process. If the child is waiting or simply
+does not exist, then we return -1 (error).
+However, if it exists, we must change its "wait" attribute to true before
+entering a while loop that iterates as long as the "exit" attribute is false.
+As soon as it changes to true, we save the status of the child, remove it
+from the parent's children_list and return the saved status.
+
 
 >> B6: Any access to user program memory at a user-specified address
 >> can fail due to a bad pointer value.  Such accesses must cause the
@@ -101,12 +197,33 @@ kernel or user, the target string argument pointer attempts to access.
 >> paragraphs, describe the strategy or strategies you adopted for
 >> managing these issues.  Give an example.
 
+The first thing we do in the syscall_handler (syscall.c) is checking
+the address. If it is correct, nothing happens and we can keep going,
+but if it is not, we are calling "exit (-1)".
+We later use user_to_kernel_ptr, which converts a user address to a 
+kernel address if and only if this address is mapped; if it is not,
+we are calling "exit (-1)".
+
+Whenever an error in the address is detected, the system call "exit (-1)"
+is called to terminate the process. We update the status of the current thread's 
+child process, close all the opened files, and then call "thread_exit()".
+
+For example, in the system call "write", we first check that the buffer's addresses
+are contained in the virtual user address space. If they are not, then we
+call "exit (-1)".
+
 ---- SYNCHRONIZATION ----
 
 >> B7: The "exec" system call returns -1 if loading the new executable
 >> fails, so it cannot return before the new executable has completed
 >> loading.  How does your code ensure this?  How is the load
 >> success/failure status passed back to the thread that calls "exec"?
+
+The loading status is kept in the child_process structure. Each child
+process has thus its own loading status and when "exec" is called, we
+simply need to check that the loading has been successful, using a 
+while loop. If the new executable has not properly completed loading,
+"exit (-1)" is called.
 
 >> B8: Consider parent process P with child process C.  How do you
 >> ensure proper synchronization and avoid race conditions when P
@@ -115,16 +232,43 @@ kernel or user, the target string argument pointer attempts to access.
 >> terminates without waiting, before C exits?  After C exits?  Are
 >> there any special cases?
 
+P will check the loading status of C in the very first place. 
+Before C exits, C will be an alive thread (information stored
+in the status attribute). P will need to wait in a while loop
+until this status changes.
+After C exits, P will know it because C's structure will then
+be equal NULL.
+At the end of "wait", P will ensure that every resources allocated
+for C are freed while removing it from the children_list.
+If P terminated without waiting before C exits, C will detect it
+by trying to find its parent ID, which won't exist anymore. C will
+then free all resources when it exits.
+If P terminates without calling wait before C exits, C can detect this 
+by checking its parrent pointer and free all resource when it exits.
+If P terminates without calling wait after C exists, P will remove
+and free all the resources that have been allocated for C.
+ 
+
 ---- RATIONALE ----
 
 >> B9: Why did you choose to implement access to user memory from the
 >> kernel in the way that you did?
 
+We make sure that the memory we are accessing is the user memory, and 
+not the kernel memory. Moreover, the system call "exit (-1)" will be 
+immediately called if the kernel tries to access an invalid address.
+
 >> B10: What advantages or disadvantages can you see to your design
 >> for file descriptors?
 
+Every file descriptor is unique and bound to a single process, which
+implies that we do not need to take race conditions into account, and
+which is also convenient when it comes to files managing.
+
 >> B11: The default tid_t to pid_t mapping is the identity mapping.
 >> If you changed it, what advantages are there to your approach?
+
+We did not change it.
 
 			   SURVEY QUESTIONS
 			   ================

@@ -83,6 +83,9 @@ kernel or user, the target string argument pointer attempts to access.
 The shell parses the command line by itself and checks it before passing 
 it to the kernel. The kernel doesn't have to parse the command itself
 and is thus more protected, since it is not likely that it will receive garbage.
+Also, parsing arguments does not require access to anyprivileged parts 
+of the system, so it is unneccessary for the kernel to implement this 
+functionality.
 
 			     SYSTEM CALLS
 			     ============

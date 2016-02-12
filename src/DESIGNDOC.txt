@@ -170,7 +170,19 @@ check the pointer's address and convert it.
 >> for a system call that only copies 2 bytes of data?  Is there room
 >> for improvement in these numbers, and how much?
 
-
+When attempting to copy data from user space into kernel space, the 
+least number of inspections of the page table would be one. This could 
+result from either a pass of an invalid user virtual address pointer 
+to pagedir_get_page() or if all the data is stored on a single page. 
+The worst case scenario would be if every byte of data to be copied is 
+stored on separate pages, and so the page table would need to be 
+inspected as many times as the number of bytes to to copied. By this
+reasoning, the least number of page table inspections to copy a full
+page of data is 1 inspection, and the greatest number is 4096
+inspections. Similarly, a system call to copy two bytes of data would
+result in either one inspection or two. This worst case scenario can
+be avoided if data segments to be stored in memory are saved in 
+segments closer to the size of the page.
 
 >> B5: Briefly describe your implementation of the "wait" system call
 >> and how it interacts with process termination.

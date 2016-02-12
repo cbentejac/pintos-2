@@ -41,21 +41,20 @@ or modified.
 >> you arrange for the elements of argv[] to be in the right order?
 >> How do you avoid overflowing the stack page?
 
-==> Algorithm
 Argument parsing has been implemented in the setup_stack function.
 We first tokenize the command line from left to right using strtok_r() 
 and push each word at the top of the stack (at that point, we don't 
 care about the order). While pushing to the stack, we also save each 
 token's address in our dynamically allocated array argv[]. If needed 
-(that is to say, if argv is full), we dynamically resize it. We also ensure 
-that argv[argc], the last element of argv[], is a null pointer. We then 
-word-align the stack pointer, in order to provide a faster access to addresses. 
-Once the stack pointer is word-aligned, we push the content of argv (addresses 
-pointing to tokens obtained with strtok_r()) to the stack in reverse order: the
-last argument of the command line will thus be the first one to be pushed to the
-stack (as the command line has been parsed from left to right, pushing from right
-to left is easy). We then push argv (argv[0] address), argc, and a fake return 
-address before freeing argv[].
+(that is to say, if argv is full), we dynamically resize it. We also 
+ensure that argv[argc], the last element of argv[], is a null pointer. 
+We then word-align the stack pointer, in order to provide a faster access 
+to addresses. Once the stack pointer is word-aligned, we push the content 
+of argv (addresses pointing to tokens obtained with strtok_r()) to the stack 
+in reverse order: thelast argument of the command line will thus be the first
+one to be pushed to the stack (as the command line has been parsed from left 
+to right, pushing from right to left is easy). We then push argv (argv[0] 
+address), argc, and a fake return address before freeing argv[].
 
 
 ---- RATIONALE ----

@@ -296,14 +296,38 @@ the quarter.
 >> In your opinion, was this assignment, or any one of the three problems
 >> in it, too easy or too hard?  Did it take too long or too little time?
 
+The problems were not too hard (but they were way harder than the first 
+project's problems) but took a lot of time (once again, way longer than the
+first project).
+
 >> Did you find that working on a particular part of the assignment gave
 >> you greater insight into some aspect of OS design?
+
+The whole assignment was really interesting as it allowed us to understand
+in details how user processes work, and what it implies to enable I/O or
+interactivity, with a great understanding of the system calls.
 
 >> Is there some particular fact or hint we should give students in
 >> future quarters to help them solve the problems?  Conversely, did you
 >> find any of our guidance to be misleading?
 
+//
+
 >> Do you have any suggestions for the TAs to more effectively assist
 >> students, either for future quarters or the remaining projects?
 
+//
+
 >> Any other comments?
+
+We have not really been guided through this project as we have been for
+the first project. Instead, we have been given some code "out of context".
+Even though this code was commented, it was hard to identify its precise
+purpose and by extension, how to complete it. This code presented one
+solution for the project, but as we did not really know where we were 
+going when it was given to us, it was hard to understand how this wolution
+worked and make a good use of the given code. And as some code was given
+to us, we first focused on it and how to make it work properly rather than
+reasonning about the implementation of the solution itself.
+Maybe it would have been better to walk us through that solution without 
+any code like in project 1 and then let us figure out how to implement it?

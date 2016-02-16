@@ -115,6 +115,15 @@ struct thread
                                           thread. */
     struct lock *lock_to_acquire;      /* Lock the thread is waiting for. */
     struct list_elem donor;            /* List element for the priority donors. */
+
+    /* For file system calls. */
+    struct list file_list;
+    int fd;
+  
+    /* For other system calls. */
+    struct list children_list;
+    struct child_process *cp;
+    tid_t parent; 
   };
 
 /* If false (default), use round-robin scheduler.
@@ -163,4 +172,6 @@ void priority_donation (void);
 void update_priority (void);
 void remove_donor (struct lock *lock);
 
+/* Functions added for system calls implementation. */
+bool thread_alive (int pid);
 #endif /* threads/thread.h */

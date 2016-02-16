@@ -8,11 +8,13 @@
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
 #include "threads/palloc.h"
+#include "threads/malloc.h"
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
 #ifdef USERPROG
 #include "userprog/process.h"
+#include "userprog/syscall.h"
 #endif
 
 /* Random value for struct thread's `magic' member.
@@ -206,6 +208,11 @@ thread_create (const char *name, int priority,
   sf->ebp = 0;
 
   intr_set_level (old_level);
+
+  /* Add a child process to the children list. */
+  t->parent = thread_tid ();
+  struct child_process *cp = add_child_process (t->tid);
+  t->cp = cp;
 
   /* Add to run queue. */
   thread_unblock (t);
@@ -501,6 +508,11 @@ init_thread (struct thread *t, const char *name, int priority)
   list_init (&t->priority_donors);
   t->lock_to_acquire = NULL;
   list_push_back (&all_list, &t->allelem);
+  list_init (&t->file_list);
+  t->fd = 2; // Min file descriptor.
+  list_init (&t->children_list);
+  t->parent = -1; // No parent.
+  t->cp = NULL; // No child.
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
@@ -738,4 +750,21 @@ remove_donor (struct lock *lock)
       list_remove (e);
     e = next;
   }
+}
+
+/* Given a PID, iterates through the all_list to see if the thread 
+   corresponding to PID is still alive. Returns true it it is the case,
+   false if it dead. */
+bool 
+thread_alive (int pid)
+{
+  struct list_elem *e = list_begin (&all_list);
+  while (e != list_end (&all_list))
+  {
+    struct thread *t = list_entry (e, struct thread, allelem);
+    if (t->tid == pid)
+      return true;
+    e = list_next (e);
+  }
+  return false;
 }

@@ -493,6 +493,14 @@ setup_stack (void **esp, const char *file_name, char **save_ptr)
   int argc = 0;
   int argv_size = 2;
 
+  /* Align words for faster access (multiple of 4). */
+  i = (size_t) *esp % 4;
+  if (i)
+  {
+    *esp = *esp - i;
+    memcpy (*esp, &argv[argc], i);
+  }
+
   /* Place the words at the top of the stack (order doesn't matter). */
   for (token = (char *) file_name; token != NULL;
        token = strtok_r (NULL, " ", save_ptr))
@@ -511,14 +519,6 @@ setup_stack (void **esp, const char *file_name, char **save_ptr)
   }
 
   argv[argc] = 0;
-
-  /* Align words for faster access (multiple of 4). */
-  i = (size_t) *esp % 4;
-  if (i)
-  {
-    *esp = *esp - i;
-    memcpy (*esp, &argv[argc], i);
-  }
 
   /* Push argv[i] on the stack in reverse order. */
   for (i = argc; i >= 0; i--)

@@ -73,7 +73,11 @@ start_process (void *file_name_)
   success = load (file_name, &if_.eip, &if_.esp, &save_ptr);
 
   if (success)
+  {
+    thread_current ()->exec = filesys_open (file_name);
+    file_deny_write (thread_current ()->exec);
     thread_current ()->cp->load_status = 1; // Load success = 1
+  }
   else 
     thread_current ()->cp->load_status = -1; // Load fail = -1
 
@@ -542,7 +546,6 @@ setup_stack (void **esp, const char *file_name, char **save_ptr)
 
   /* Free the memory allocated for argv. */
   free (argv);
-
   return success;
 }
 

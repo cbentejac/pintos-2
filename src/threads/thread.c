@@ -512,6 +512,7 @@ init_thread (struct thread *t, const char *name, int priority)
   t->fd = 2; // Min file descriptor.
   list_init (&t->children_list);
   t->parent = -1; // No parent.
+  t->exec = NULL; // No executable.
   t->cp = NULL; // No child.
 }
 
@@ -767,4 +768,19 @@ thread_alive (int pid)
     e = list_next (e);
   }
   return false;
+}
+
+struct thread *
+get_by_tid (int tid)
+{
+  struct thread *t; 
+  struct list_elem *e = list_begin (&all_list);
+  while (e != list_end (&all_list))
+  {
+    t = list_entry (e, struct thread, allelem);
+    if (t->tid = tid)
+      return t;
+    e = list_next (e);
+  }
+  return NULL;
 }

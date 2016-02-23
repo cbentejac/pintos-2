@@ -102,6 +102,16 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
+
+    /* For file system calls. */
+    struct list file_list;
+    int fd;
+    struct file *exec;
+  
+    /* For other system calls. */
+    struct list children_list;
+    struct child_process *cp;
+    tid_t parent; 
 #endif
 
     /* Owned by thread.c. */
@@ -115,15 +125,6 @@ struct thread
                                           thread. */
     struct lock *lock_to_acquire;      /* Lock the thread is waiting for. */
     struct list_elem donor;            /* List element for the priority donors. */
-
-    /* For file system calls. */
-    struct list file_list;
-    int fd;
-  
-    /* For other system calls. */
-    struct list children_list;
-    struct child_process *cp;
-    tid_t parent; 
   };
 
 /* If false (default), use round-robin scheduler.
@@ -174,4 +175,5 @@ void remove_donor (struct lock *lock);
 
 /* Functions added for system calls implementation. */
 bool thread_alive (int pid);
+struct thread *get_by_tid (int tid);
 #endif /* threads/thread.h */

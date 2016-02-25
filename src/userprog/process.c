@@ -505,9 +505,8 @@ setup_stack_helper (const char *file_name, char **save_ptr,
   char *token;
   int i;
   int argc = 0;
-  int size_argv = 2;
-  char **argv = malloc (size_argv * sizeof (char *));
-  void **uarg = malloc (size_argv * sizeof (void *)); 
+  int size = 2;
+  void **uarg = malloc (size * sizeof (void *)); 
   char *karg; 
   bool success = true;
 
@@ -515,9 +514,7 @@ setup_stack_helper (const char *file_name, char **save_ptr,
   for (token = (char *) file_name; token != NULL;
        token = strtok_r (NULL, " ", save_ptr))
   {
-    argv[argc] = malloc (strlen (token) + 1);
-    strlcpy (argv[argc], token, strlen (token) + 1);
-    karg = push (kpage, &ofs, argv[argc], strlen (token) + 1);
+    karg = push (kpage, &ofs, token, strlen (token) + 1);
     if (karg == NULL)
       success = false;
  
@@ -526,21 +523,18 @@ setup_stack_helper (const char *file_name, char **save_ptr,
 
     argc++;
 
-    /* If argv is full (and by extension, uarg is full), resize
-       both of them. */
-    if (argc >= size_argv)
+    /* If uarg is full, resize it. */
+    if (argc >= size)
     {
-      size_argv = size_argv * 2;
-      argv = realloc (argv, size_argv * sizeof (char *));
-      uarg = realloc (uarg, size_argv * sizeof (void *));
+      size = size * 2;
+      uarg = realloc (uarg, size * sizeof (void *));
     } 
   }
 
   /* Null pointer to push between the words and their addresses. */
-  argv[argc] = 0;
   uarg[argc] = 0; 
 
-  /* Push argv[i] address on the stack in reverse order. */
+  /* Push words' addresses on the stack in reverse order. */
   for (i = argc; i >= 0; i--)
   {
     karg = push (kpage, &ofs, &uarg[i], sizeof (uarg[i]));
@@ -566,7 +560,6 @@ setup_stack_helper (const char *file_name, char **save_ptr,
   *esp = upage + ofs;
 
   /* Free allocated memory. */
-  free (argv);
   free (uarg);
 
   return success;

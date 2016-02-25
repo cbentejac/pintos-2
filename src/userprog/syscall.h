@@ -3,6 +3,7 @@
 
 #include "threads/synch.h"
 
+#define ERROR -1
 
 /* Lock to avoid race conditions during the file system calls. */
 struct lock sys_lock;

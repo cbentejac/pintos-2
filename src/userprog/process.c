@@ -115,7 +115,7 @@ process_wait (tid_t child_tid UNUSED)
 {
   struct child_process *cp = get_child_process (child_tid);
   if (cp == NULL || cp->wait == true)
-    return -1;
+    return ERROR;
 
   cp->wait = true;
 

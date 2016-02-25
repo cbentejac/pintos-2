@@ -171,7 +171,7 @@ exec (const char *cmd_line)
   struct child_process *cp = get_child_process (pid);
 
   if (cp == NULL)
-    return -1; 
+    return ERROR; 
 
   while (cp->load_status == 0) // 0 = not loaded.
   {
@@ -179,7 +179,7 @@ exec (const char *cmd_line)
     barrier (); /* Re-checks condition. */
   }
   if (cp->load_status == -1) // -1 = load fail.
-    return -1;
+    return ERROR;
 
   return pid;
 }
@@ -234,7 +234,7 @@ open (const char *file)
   if (f != NULL) // If the file we are trying to open exists. 
     fd = add_file (f);
   else
-    fd = -1; // The file does not exist: error. 
+    fd = ERROR; // The file does not exist: error. 
 
   lock_release (&sys_lock);
   return fd;
@@ -251,7 +251,7 @@ filesize (int fd)
   if (f != NULL)
     size = file_length (f);
   else
-    size = -1; 
+    size = ERROR; 
   
   lock_release (&sys_lock);
   return size;
@@ -282,7 +282,7 @@ read (int fd, void *buffer, unsigned size)
   if (f != NULL)
     b = file_read (f, buffer, size);
   else
-    b = -1;
+    b = ERROR;
 
   lock_release (&sys_lock);
   return b;
@@ -307,7 +307,7 @@ write (int fd, const void *buffer, unsigned size)
   if (f != NULL)
     b = file_write (f, buffer, size);
   else
-    b = -1;
+    b = ERROR;
 
   lock_release (&sys_lock);
   return b;
@@ -337,7 +337,7 @@ tell (int fd)
   if (f != NULL)
     offset = file_tell (f);
   else
-    offset = -1;
+    offset = ERROR;
 
   lock_release (&sys_lock);
   return offset;
@@ -361,7 +361,7 @@ void
 is_valid_ptr (const void *vaddr)
 {
   if (is_user_vaddr (vaddr) == false || vaddr < ((void *) 0x08048000))
-    exit (-1);
+    exit (ERROR);
 }
 
 /* Converts a user virtual address to a kernel virtual address. */
@@ -371,7 +371,7 @@ int user_to_kernel_ptr (const void *vaddr)
   void *ptr = pagedir_get_page (thread_current ()->pagedir, vaddr);
 
   if (ptr == NULL)
-    exit (-1);
+    exit (ERROR);
 
   return (int) ptr;
 }
@@ -439,7 +439,8 @@ close_file (int fd)
 
       /* If we don't want to close all the files (fd != -1), we don't 
          need to keep on iterating through the list, as we have just 
-         closed the file we wanted to close. We can break at this point. */       if (fd != -1)
+         closed the file we wanted to close. We can break at this point. */       
+      if (fd != -1)
         break;
     }
     e = next;

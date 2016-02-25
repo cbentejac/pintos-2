@@ -512,7 +512,6 @@ init_thread (struct thread *t, const char *name, int priority)
   t->fd = 2; // Min file descriptor.
   list_init (&t->children_list);
   t->parent = -1; // No parent.
-  t->exec = NULL; // No executable.
   t->cp = NULL; // No child.
 }
 

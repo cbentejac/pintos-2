@@ -80,8 +80,7 @@ start_process (void *file_name_)
 
   if (success)
   {
-    thread_current ()->exec = filesys_open (file_name);
-    file_deny_write (thread_current ()->exec);
+    file_deny_write (filesys_open (file_name));
     thread_current ()->cp->load_status = 1; // Load success = 1
   }
   else 

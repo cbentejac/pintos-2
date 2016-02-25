@@ -106,7 +106,6 @@ struct thread
     /* For file system calls. */
     struct list file_list;
     int fd;
-    struct file *exec;
   
     /* For other system calls. */
     struct list children_list;

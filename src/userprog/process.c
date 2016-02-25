@@ -572,3 +572,62 @@ install_page (void *upage, void *kpage, bool writable)
   return (pagedir_get_page (t->pagedir, upage) == NULL
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
 }
+
+
+/* Initializes a child process structure and assign it to the current
+   thread by pushing it into its children list. */
+struct child_process *
+add_child_process (int pid)
+{
+  struct child_process *cp = malloc (sizeof (struct child_process));
+  cp->pid = pid;
+  cp->load_status = 0;
+  cp->wait = false;
+  cp->exit = false;
+  lock_init (&cp->lock_wait);
+  list_push_back (&thread_current ()->children_list, &cp->elem);
+  return cp;
+}
+
+/* Given a pid, returns the child process structure corresponding
+   to that pid in the current thread's children list. If no such 
+   child process is found, returns NULL. */
+struct child_process *
+get_child_process (int pid)
+{
+  struct list_elem *e = list_begin (&thread_current ()->children_list);
+  while (e != list_end (&thread_current ()->children_list))
+  {
+    struct child_process *cp = list_entry (e, struct child_process, elem);
+    if (pid == cp->pid)
+      return cp;
+    e = list_next (e);
+  }
+  return NULL;
+}
+
+/* Removes a child process from a thread's list. */
+void
+remove_child_process (struct child_process *cp)
+{
+  list_remove (&cp->elem);
+  free (cp);
+}
+
+/* Removes all the children processes of the current thread. (Empty 
+   the children list) */ 
+void 
+remove_child_processes (void)
+{
+  struct list_elem *e = list_begin (&thread_current ()->children_list);
+  struct list_elem *next;
+
+  while (e != list_end (&thread_current ()->children_list))
+  {
+    next = list_next (e);
+    struct child_process *cp = list_entry (e, struct child_process, elem);
+    list_remove (&cp->elem);
+    free (cp);
+    e = next;
+  }
+}

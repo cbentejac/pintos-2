@@ -371,25 +371,30 @@ int user_to_kernel_ptr (const void *vaddr)
   void *ptr = pagedir_get_page (thread_current ()->pagedir, vaddr);
 
   if (ptr == NULL)
-  {
     exit (-1);
-  }
+
   return (int) ptr;
 }
 
+/* Add a new file to the list of files of the current thread, and
+   updates the file descriptor accordingly. */
 int 
 add_file (struct file *f)
 {
-  /* Allocate memory for a new file to ass to the list. */
+  /* Allocate memory for a new file to add to the list. */
   struct process_file *pf = malloc (sizeof (struct process_file));
   pf->file = f;
-  pf->fd = thread_current ()->fd;
-  /* Increments the file descriptor. */
+  pf->fd = thread_current ()->fd; // "Assign" fd number (used to identify).
+ 
+ /* Increments the thread's file descriptor. */
   thread_current ()->fd = thread_current ()->fd + 1; 
   list_push_back (&thread_current ()->file_list, &pf->elem);
   return pf->fd;
 }
 
+/* Given a file descriptor number, returns the corresponding file 
+   in the current thread's list of files. If no such file is found, 
+   return NULL. */
 struct file *
 get_file (int fd)
 {
@@ -408,6 +413,9 @@ get_file (int fd)
   return NULL; // If the file has not been found, return NULL.
 }
 
+/* Given a file descriptor number, find the corresponding file in
+   the current thread's list of files and close it. If no such file
+   is found, nothing happens. */
 void 
 close_file (int fd)
 {
@@ -434,58 +442,6 @@ close_file (int fd)
          closed the file we wanted to close. We can break at this point. */       if (fd != -1)
         break;
     }
-    e = next;
-  }
-}
-
-
-struct child_process *
-add_child_process (int pid)
-{
-  struct child_process *cp = malloc (sizeof (struct child_process));
-  cp->pid = pid;
-  cp->load_status = 0;
-  cp->wait = false;
-  cp->exit = false;
-  lock_init (&cp->lock_wait);
-  list_push_back (&thread_current ()->children_list, &cp->elem);
-  return cp;
-}
-
-struct child_process *
-get_child_process (int pid)
-{
-  struct list_elem *e = list_begin (&thread_current ()->children_list);
-  while (e != list_end (&thread_current ()->children_list))
-  {
-    struct child_process *cp = list_entry (e, struct child_process, elem);
-    if (pid == cp->pid)
-      return cp;
-    e = list_next (e);
-  }
-  return NULL;
-}
-
-
-void
-remove_child_process (struct child_process *cp)
-{
-  list_remove (&cp->elem);
-  free (cp);
-}
-
-void 
-remove_child_processes (void)
-{
-  struct list_elem *e = list_begin (&thread_current ()->children_list);
-  struct list_elem *next;
-
-  while (e != list_end (&thread_current ()->children_list))
-  {
-    next = list_next (e);
-    struct child_process *cp = list_entry (e, struct child_process, elem);
-    list_remove (&cp->elem);
-    free (cp);
     e = next;
   }
 }

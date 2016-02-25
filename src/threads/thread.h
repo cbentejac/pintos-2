@@ -174,5 +174,4 @@ void remove_donor (struct lock *lock);
 
 /* Functions added for system calls implementation. */
 bool thread_alive (int pid);
-struct thread *get_by_tid (int tid);
 #endif /* threads/thread.h */

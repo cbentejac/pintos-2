@@ -474,6 +474,104 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   return true;
 }
 
+/* Pushes the SIZE bytes in BUF onto the stack in KPAGE, whose
+   page-relative stack pointer is *OFS, and then adjusts *OFS
+   appropriately.  The bytes pushed are rounded to a 32-bit
+   boundary.
+
+   If successful, returns a pointer to the newly pushed object.
+   On failure, returns a null pointer. */
+static void *
+push (uint8_t *kpage, size_t *offset, const void *buf, size_t size) 
+{
+  size_t padsize = ROUND_UP (size, sizeof (uint32_t));
+  
+  if (*offset < padsize)
+    return NULL;
+
+  *offset -= padsize;
+  
+  memcpy (kpage + *offset + (padsize - size), buf, size);
+  
+  return kpage + *offset + (padsize - size);
+}
+
+static bool 
+setup_stack_helper (const char *file_name, char **save_ptr,
+                    uint8_t *kpage, uint8_t * upage, void ** esp) 
+{
+  size_t ofs = PGSIZE; 
+  const char *null = NULL; 
+  char *token;
+  int i;
+  int argc = 0;
+  int size_argv = 2;
+  char **argv = malloc (size_argv * sizeof (char *));
+  void **uarg = malloc (size_argv * sizeof (void *)); 
+  char *karg; 
+  bool success = true;
+
+  /* Place the words at the top of the stack (order doesn't matter). */
+  for (token = (char *) file_name; token != NULL;
+       token = strtok_r (NULL, " ", save_ptr))
+  {
+    argv[argc] = malloc (strlen (token) + 1);
+    strlcpy (argv[argc], token, strlen (token) + 1);
+    karg = push (kpage, &ofs, argv[argc], strlen (token) + 1);
+    if (karg == NULL)
+      success = false;
+ 
+    uarg[argc] = upage + (karg - (char *) kpage);   
+    ASSERT (is_user_vaddr (uarg[argc]));
+
+    argc++;
+
+    /* If argv is full (and by extension, uarg is full), resize
+       both of them. */
+    if (argc >= size_argv)
+    {
+      size_argv = size_argv * 2;
+      argv = realloc (argv, size_argv * sizeof (char *));
+      uarg = realloc (uarg, size_argv * sizeof (void *));
+    } 
+  }
+
+  /* Null pointer to push between the words and their addresses. */
+  argv[argc] = 0;
+  uarg[argc] = 0; 
+
+  /* Push argv[i] address on the stack in reverse order. */
+  for (i = argc; i >= 0; i--)
+  {
+    karg = push (kpage, &ofs, &uarg[i], sizeof (uarg[i]));
+    if (karg == NULL) 
+      success = false; 
+  }  
+
+  uarg[argc] = upage + (karg - (char *) kpage);
+  ASSERT (is_user_vaddr (uarg[argc]));
+  /* Push argv (argv[0] address) on the stack. */
+  if (push (kpage, &ofs, &uarg[argc], sizeof (uarg)) == NULL)
+    success = false;
+
+  /* Push argc on the stack. */
+  if (push (kpage, &ofs, &argc, sizeof (int)) == NULL)
+    success = false;
+
+  /* Push fake "return address" on the stack. */
+  if (push (kpage, &ofs, &null, sizeof (null)) == NULL)
+    success = false;
+
+  /* Set the stack pointer. */
+  *esp = upage + ofs;
+
+  /* Free allocated memory. */
+  free (argv);
+  free (uarg);
+
+  return success;
+}
+
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
 static bool
@@ -485,71 +583,17 @@ setup_stack (void **esp, const char *file_name, char **save_ptr)
   kpage = palloc_get_page (PAL_USER | PAL_ZERO);
   if (kpage != NULL) 
     {
-      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+      uint8_t *upage = ((uint8_t *) PHYS_BASE) - PGSIZE;
+      success = install_page (upage, kpage, true);
       if (success)
-        *esp = PHYS_BASE;
+        success = setup_stack_helper (file_name, save_ptr,
+                  kpage, upage, esp);
       else
       {
         palloc_free_page (kpage);
         return success;
       }
     }
-
-  char *token;
-  char **argv = malloc (2 * sizeof (char *));
-  int i;
-  int argc = 0;
-  int argv_size = 2;
-
-  /* Place the words at the top of the stack (order doesn't matter). */
-  for (token = (char *) file_name; token != NULL;
-       token = strtok_r (NULL, " ", save_ptr))
-  {
-    *esp -= strlen (token) + 1;
-    argv[argc] = *esp;
-    argc++;
-
-    /* If argv is full, resize it. */
-    if (argc >= argv_size)
-    {
-      argv_size = argv_size * 2;
-      argv = realloc (argv, argv_size * sizeof (char *));
-    }
-    memcpy (*esp, token, strlen (token) + 1);
-  }
-
-  argv[argc] = 0;
-
-  /* Align words for faster access (multiple of 4). */
-  i = (size_t) *esp % 4;
-  if (i)
-  {
-    *esp = *esp - i;
-    memcpy (*esp, &argv[argc], i);
-  }
-
-  /* Push argv[i] on the stack in reverse order. */
-  for (i = argc; i >= 0; i--)
-  {
-    *esp = *esp - sizeof (char *);
-    memcpy (*esp, &argv[i], sizeof (char *));
-  } 
-
-  /* Push argv (argv[0] address) on the stack. */
-  token = *esp;
-  *esp = *esp - sizeof (char **);
-  memcpy (*esp, &token, sizeof (char **));
-
-  /* Push argc on the stack. */
-  *esp = *esp - sizeof (int);
-  memcpy (*esp, &argc, sizeof (int));
-
-  /* Push fake "return address" on the stack. */
-  *esp = *esp - sizeof (void *);
-  memcpy (*esp, &argv[argc], sizeof (void *));
-
-  /* Free the memory allocated for argv. */
-  free (argv);
   return success;
 }
 
@@ -573,7 +617,6 @@ install_page (void *upage, void *kpage, bool writable)
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
 }
 
-
 /* Initializes a child process structure and assign it to the current
    thread by pushing it into its children list. */
 struct child_process *
@@ -584,7 +627,6 @@ add_child_process (int pid)
   cp->load_status = 0;
   cp->wait = false;
   cp->exit = false;
-  lock_init (&cp->lock_wait);
   list_push_back (&thread_current ()->children_list, &cp->elem);
   return cp;
 }

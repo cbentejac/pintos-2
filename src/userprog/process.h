@@ -11,7 +11,6 @@ struct child_process
   bool wait;
   bool exit;
   int status;
-  struct lock lock_wait;
   struct list_elem elem;
 };
 

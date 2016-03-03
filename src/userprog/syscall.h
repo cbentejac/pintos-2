@@ -1,23 +1,30 @@
 #ifndef USERPROG_SYSCALL_H
 #define USERPROG_SYSCALL_H
 
+#include <stdint.h>
+#include <user/syscall.h>
 #include "threads/synch.h"
 
+#define SUCCESS 0
 #define ERROR -1
-
-/* Lock to avoid race conditions during the file system calls. */
-struct lock sys_lock;
-
-struct process_file
-{
-  struct file *file;
-  int fd;
-  struct list_elem elem;
-};
+#define STDIN 0
+#define STDOUT 1
 
 void syscall_init (void);
-void is_valid_ptr (const void *vaddr);
-int user_to_kernel_ptr (const void *vaddr);
-struct file *get_file (int fd);
-void close_file (int fd);
+
+/* Syscall implementation. */
+void exit (int);
+int write (int, const void *, unsigned);
+int read (int, void *, unsigned);
+int open (const char *);
+void close (int);
+int wait (pid_t);
+void halt (void);
+pid_t exec (const char *);
+bool create (const char *, unsigned);
+bool remove (const char *);
+int filesize (int);
+void seek (int, unsigned);
+unsigned tell (int);
+
 #endif /* userprog/syscall.h */

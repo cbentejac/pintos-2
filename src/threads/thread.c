@@ -8,13 +8,11 @@
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
 #include "threads/palloc.h"
-#include "threads/malloc.h"
 #include "threads/switch.h"
-#include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "threads/malloc.h"
 #ifdef USERPROG
 #include "userprog/process.h"
-#include "userprog/syscall.h"
 #endif
 
 /* Random value for struct thread's `magic' member.
@@ -61,6 +59,8 @@ static unsigned thread_ticks;   /* # of timer ticks since last yield. */
    Controlled by kernel command-line option "-o mlfqs". */
 bool thread_mlfqs;
 
+static struct info_thread info_main;
+
 static void kernel_thread (thread_func *, void *aux);
 
 static void idle (void *aux UNUSED);
@@ -72,6 +72,7 @@ static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
+void init_info_thread (struct thread *);
 
 
 /* Initializes the threading system by transforming the code
@@ -101,6 +102,7 @@ thread_init (void)
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
+  init_info_thread (initial_thread);
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -186,6 +188,7 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
+  init_info_thread (t);
 
   /* Prepare thread for first run by initializing its stack.
      Do this atomically so intermediate values for the 'stack' 
@@ -208,11 +211,6 @@ thread_create (const char *name, int priority,
   sf->ebp = 0;
 
   intr_set_level (old_level);
-
-  /* Add a child process to the children list. */
-  t->parent = thread_tid ();
-  struct child_process *cp = add_child_process (t->tid);
-  t->cp = cp;
 
   /* Add to run queue. */
   thread_unblock (t);
@@ -507,12 +505,11 @@ init_thread (struct thread *t, const char *name, int priority)
   t->magic = THREAD_MAGIC;
   list_init (&t->priority_donors);
   t->lock_to_acquire = NULL;
+  t->executable = NULL; 
+  list_init (&t->files_list);
+  t->fd = 2; /* 0 and 1 are reserved for STDIN and STDOUT. */  
+
   list_push_back (&all_list, &t->allelem);
-  list_init (&t->file_list);
-  t->fd = 2; // Min file descriptor.
-  list_init (&t->children_list);
-  t->parent = -1; // No parent.
-  t->cp = NULL; // No child.
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
@@ -752,20 +749,29 @@ remove_donor (struct lock *lock)
   }
 }
 
-/* Given a PID, iterates through the all_list to see if the thread 
-   corresponding to PID is still alive. Returns true it it is the case,
-   false if it dead. */
-bool 
-thread_alive (int pid)
+/* Initializes the info_thread structure of the thread T. The thread
+   is then added to the parent thread's children list. */
+void
+init_info_thread (struct thread *t)
 {
-  struct list_elem *e = list_begin (&all_list);
-  while (e != list_end (&all_list))
-  {
-    struct thread *t = list_entry (e, struct thread, allelem);
-    if (t->tid == pid)
-      return true;
-    e = list_next (e);
-  }
-  return false;
-}
+  struct info_thread *info;
+  if (t != initial_thread)
+    info = (struct info_thread *) malloc (sizeof (struct info_thread));
+  else
+    info = &info_main;
 
+  ASSERT (info != NULL);
+
+  info->alive = true;
+  info->parent_alive = true;
+  list_init (&info->children_list);
+  sema_init (&info->sema_wait, 0);
+  sema_init (&info->sema_load, 0);
+  info->exit = -1;
+  info->load_status = false;
+  info->tid = t->tid;
+  info->wait = false;
+  if (thread_current ()->info != NULL)
+    list_push_back (&thread_current ()->info->children_list, &info->elem);
+  t->info = info;
+}

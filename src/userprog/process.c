@@ -1,5 +1,4 @@
 #include "userprog/process.h"
-#include "userprog/syscall.h"
 #include <debug.h>
 #include <inttypes.h>
 #include <round.h>
@@ -9,6 +8,7 @@
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
+#include "userprog/syscall.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
@@ -23,6 +23,8 @@
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), 
                   void **esp, char **save_ptr);
+struct info_thread *get_child_by_tid (tid_t child_tid);
+struct file *f = NULL;
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -42,11 +44,14 @@ process_execute (const char *file_name)
   strlcpy (fn_copy, file_name, PGSIZE);
 
   /* Get the file name. */
-  char *fn; 
+  char *fn;
+  struct info_thread *info_child;
   fn = palloc_get_page (0);
+  if (fn == NULL)
+    return TID_ERROR;
   strlcpy (fn, file_name, PGSIZE);
   char *save_ptr;
-  file_name = strtok_r ((char *) fn, " ", &save_ptr);
+  fn = strtok_r (fn, " ", &save_ptr);
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (fn, PRI_DEFAULT, start_process, fn_copy);
@@ -54,7 +59,19 @@ process_execute (const char *file_name)
   palloc_free_page (fn);
 
   if (tid == TID_ERROR)
+  {
     palloc_free_page (fn_copy); 
+    return TID_ERROR;
+  }
+
+  /* The child can fail at loading the executable. The parent
+     waits until the loading is done and if it's not successful,
+     an error is returned. */
+  info_child = get_child_by_tid (tid);
+  sema_down (&info_child->sema_load);
+  if (!info_child->load_status) /* If loading is unsucessful. */
+    return TID_ERROR;  
+
   return tid;
 }
 
@@ -66,12 +83,12 @@ start_process (void *file_name_)
   char *file_name = file_name_;
   struct intr_frame if_;
   bool success;
-
+ 
   /* Get the file name. (first token) */
   char *save_ptr;
-  file_name = strtok_r(file_name, " ", &save_ptr);
+  file_name = strtok_r((char *) file_name, " ", &save_ptr);
 
-  /* Initialize interrupt frame and load executable. */
+/* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
@@ -79,17 +96,20 @@ start_process (void *file_name_)
   success = load (file_name, &if_.eip, &if_.esp, &save_ptr);
 
   if (success)
+    thread_current ()->info->load_status = true;
+  else
   {
-    file_deny_write (filesys_open (file_name));
-    thread_current ()->cp->load_status = 1; // Load success = 1
+    palloc_free_page (file_name);
+    sema_up (&thread_current ()->info->sema_load);
+    exit (-1);
   }
-  else 
-    thread_current ()->cp->load_status = -1; // Load fail = -1
+
+  sema_up (&thread_current ()->info->sema_load);
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
   if (!success) 
-    thread_exit ();
+    process_exit ();
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -106,27 +126,24 @@ start_process (void *file_name_)
    exception), returns -1.  If TID is invalid or if it was not a
    child of the calling process, or if process_wait() has already
    been successfully called for the given TID, returns -1
-   immediately, without waiting.
-
-   This function will be implemented in problem 2-2.  For now, it
-   does nothing. */
+   immediately, without waiting. */
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-  struct child_process *cp = get_child_process (child_tid);
-  if (cp == NULL || cp->wait == true)
-    return ERROR;
+  struct info_thread *info_child = get_child_by_tid (child_tid);
 
-  cp->wait = true;
-
-  while (!cp->exit)
+  if (info_child && !info_child->wait)
   {
-    // busy waiting
-    barrier ();
+    info_child->wait = true;
+    if (&info_child->sema_wait != NULL)
+      sema_down (&info_child->sema_wait);
+    return info_child->exit; /* Returns exit status. */
   }
-  int status = cp->status;
-  remove_child_process (cp);
-  return status;
+  
+  /* If the child thread doesn't have a info_thread structure 
+     or has already waited for this thread, return -1. */
+  else 
+    return -1;
 }
 
 /* Free the current process's resources. */
@@ -134,17 +151,15 @@ void
 process_exit (void)
 {
   struct thread *cur = thread_current ();
-
   uint32_t *pd;
 
-  /* Close all the files opened by the current process. */
-  close_file (-1);
-
-  /* Remove all the children from the list. */
-  remove_child_processes ();
-
-  if (thread_alive (cur->parent))
-    cur->cp->exit = true; // Handles case where thread is killed by kernel.
+  /* Closes the process' executable and reinitializes the executable
+     attribute. */
+  if (cur->executable)
+  {
+    file_close (cur->executable);
+    cur->executable = NULL;
+  }
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -243,7 +258,7 @@ struct Elf32_Phdr
 #define PF_W 2          /* Writable. */
 #define PF_R 4          /* Readable. */
 
-static bool setup_stack (void **esp, const char *file_name, 
+static bool setup_stack (void **esp, const char *file_name,
                          char **save_ptr);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
@@ -255,7 +270,7 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
    and its initial stack pointer into *ESP.
    Returns true if successful, false otherwise. */
 bool
-load (const char *file_name, void (**eip) (void), void **esp, 
+load (const char *file_name, void (**eip) (void), void **esp,
       char **save_ptr) 
 {
   struct thread *t = thread_current ();
@@ -278,6 +293,9 @@ load (const char *file_name, void (**eip) (void), void **esp,
       printf ("load: %s: open failed\n", file_name);
       goto done; 
     }
+  /* Deny the write to executable. */
+  t->executable = file;
+  file_deny_write (file);
 
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -362,7 +380,6 @@ load (const char *file_name, void (**eip) (void), void **esp,
 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
   return success;
 }
 
@@ -474,11 +491,12 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   return true;
 }
 
+
+
 /* Pushes the SIZE bytes in BUF onto the stack in KPAGE, whose
    page-relative stack pointer is *OFS, and then adjusts *OFS
    appropriately.  The bytes pushed are rounded to a 32-bit
    boundary.
-
    If successful, returns a pointer to the newly pushed object.
    On failure, returns a null pointer. */
 static void *
@@ -496,6 +514,8 @@ push (uint8_t *kpage, size_t *offset, const void *buf, size_t size)
   return kpage + *offset + (padsize - size);
 }
 
+/* Helps setting up the stack by pushing all the necessary arguments
+   in the correct order and updating the stack pointer. */
 static bool 
 setup_stack_helper (const char *file_name, char **save_ptr,
                     uint8_t *kpage, uint8_t * upage, void ** esp) 
@@ -530,6 +550,11 @@ setup_stack_helper (const char *file_name, char **save_ptr,
       uarg = realloc (uarg, size * sizeof (void *));
     } 
   }
+
+  /* TODO 
+   * Align words for faster access (multiple of 4). 
+   */
+
 
   /* Null pointer to push between the words and their addresses. */
   uarg[argc] = 0; 
@@ -582,10 +607,7 @@ setup_stack (void **esp, const char *file_name, char **save_ptr)
         success = setup_stack_helper (file_name, save_ptr,
                   kpage, upage, esp);
       else
-      {
         palloc_free_page (kpage);
-        return success;
-      }
     }
   return success;
 }
@@ -610,59 +632,24 @@ install_page (void *upage, void *kpage, bool writable)
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
 }
 
-/* Initializes a child process structure and assign it to the current
-   thread by pushing it into its children list. */
-struct child_process *
-add_child_process (int pid)
+/* Looks for the thread of tid CHILD_TID in the current thread's list
+   of children. If such a thread is found, returns its structure info_
+   thread. If not, returns NULL. */
+struct info_thread *
+get_child_by_tid (tid_t child_tid)
 {
-  struct child_process *cp = malloc (sizeof (struct child_process));
-  cp->pid = pid;
-  cp->load_status = 0;
-  cp->wait = false;
-  cp->exit = false;
-  list_push_back (&thread_current ()->children_list, &cp->elem);
-  return cp;
-}
+  struct thread *t = thread_current ();
+  struct list_elem *e = list_begin (&t->info->children_list);
+ 
+  if (t->info == NULL) 
+    return NULL;
 
-/* Given a pid, returns the child process structure corresponding
-   to that pid in the current thread's children list. If no such 
-   child process is found, returns NULL. */
-struct child_process *
-get_child_process (int pid)
-{
-  struct list_elem *e = list_begin (&thread_current ()->children_list);
-  while (e != list_end (&thread_current ()->children_list))
+  while (e != list_end (&t->info->children_list))
   {
-    struct child_process *cp = list_entry (e, struct child_process, elem);
-    if (pid == cp->pid)
-      return cp;
+    struct info_thread *info = list_entry (e, struct info_thread, elem);
+    if (info->tid == child_tid)
+      return info;
     e = list_next (e);
   }
   return NULL;
-}
-
-/* Removes a child process from a thread's list. */
-void
-remove_child_process (struct child_process *cp)
-{
-  list_remove (&cp->elem);
-  free (cp);
-}
-
-/* Removes all the children processes of the current thread. (Empty 
-   the children list) */ 
-void 
-remove_child_processes (void)
-{
-  struct list_elem *e = list_begin (&thread_current ()->children_list);
-  struct list_elem *next;
-
-  while (e != list_end (&thread_current ()->children_list))
-  {
-    next = list_next (e);
-    struct child_process *cp = list_entry (e, struct child_process, elem);
-    list_remove (&cp->elem);
-    free (cp);
-    e = next;
-  }
 }

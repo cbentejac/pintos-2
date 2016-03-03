@@ -1,38 +1,39 @@
 #include "userprog/syscall.h"
 #include <stdio.h>
 #include <syscall-nr.h>
-#include <user/syscall.h>
-#include "devices/input.h"
 #include "devices/shutdown.h"
-#include "filesys/file.h"
-#include "filesys/filesys.h"
+#include "devices/input.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "threads/malloc.h"
-#include "threads/synch.h"
-#include "userprog/pagedir.h"
+#include "filesys/filesys.h"
+#include "filesys/file.h"
 #include "userprog/process.h"
-
+#include "userprog/pagedir.h"
 
 static void syscall_handler (struct intr_frame *);
-int add_file (struct file *f);
+int get_file (int fd, struct process_file **p);
+bool is_valid_ptr (void *ptr);
+bool is_valid_buffer (void *buffer, int size);
+struct lock syslock;
 void get_args (struct intr_frame *f, int *arg, int n);
 
 void
 syscall_init (void) 
 {
-  lock_init (&sys_lock); /* Initializes the lock. */
+  lock_init (&syslock);
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
 }
 
 static void
 syscall_handler (struct intr_frame *f UNUSED) 
 {
-  is_valid_ptr ((const void *) f->esp);
   int arg[3];
+  
+  if (!is_valid_ptr ((void *) f->esp))
+    exit (ERROR);
 
- 
   switch (*(int *) f->esp)
   {
     case SYS_HALT:
@@ -40,7 +41,7 @@ syscall_handler (struct intr_frame *f UNUSED)
       halt ();
       break;
     }
-    
+
     case SYS_EXIT:
     {
       get_args (f, &arg[0], 1);
@@ -48,11 +49,10 @@ syscall_handler (struct intr_frame *f UNUSED)
       break;
     }
 
-    case SYS_EXEC:
+    case SYS_EXEC: 
     {
       get_args (f, &arg[0], 1);
-      arg[0] = user_to_kernel_ptr ((const void *) arg[0]);
-      f->eax = exec ((const char *) arg[0]);
+      f->eax = exec ((const char *) arg[0]); 
       break;
     }
 
@@ -64,9 +64,8 @@ syscall_handler (struct intr_frame *f UNUSED)
     }
 
     case SYS_CREATE:
-    { 
+    {
       get_args (f, &arg[0], 2);
-      arg[0] = user_to_kernel_ptr ((const void *) arg[0]);
       f->eax = create ((const char *) arg[0], (unsigned) arg[1]);
       break;
     }
@@ -74,7 +73,6 @@ syscall_handler (struct intr_frame *f UNUSED)
     case SYS_REMOVE:
     {
       get_args (f, &arg[0], 1);
-      arg[0] = user_to_kernel_ptr ((const void *) arg[0]);
       f->eax = remove ((const char *) arg[0]);
       break;
     }
@@ -82,22 +80,22 @@ syscall_handler (struct intr_frame *f UNUSED)
     case SYS_OPEN:
     {
       get_args (f, &arg[0], 1);
-      arg[0] = user_to_kernel_ptr ((const void *) arg[0]);
       f->eax = open ((const char *) arg[0]);
       break;
     }
-  
+
     case SYS_FILESIZE:
     {
-      get_args (f, &arg[0], 1);
+      get_args (f, &arg[0], 1); 
       f->eax = filesize (arg[0]);
       break;
     }
-
+    
     case SYS_READ:
     {
       get_args (f, &arg[0], 3);
-      arg[1] = user_to_kernel_ptr ((const void *) arg[1]);
+      if (!is_valid_ptr ((void *) arg[1]))
+        exit (ERROR);
       f->eax = read (arg[0], (void *) arg[1], (unsigned) arg[2]);
       break;
     }
@@ -105,18 +103,17 @@ syscall_handler (struct intr_frame *f UNUSED)
     case SYS_WRITE:
     {
       get_args (f, &arg[0], 3);
-      arg[1] = user_to_kernel_ptr ((const void *) arg[1]);
-      f-> eax = write (arg[0], (const void *) arg[1], (unsigned) arg[2]);
+      f->eax = write (arg[0], (void *) arg[1], (unsigned) arg[2]);
       break;
     }
 
     case SYS_SEEK:
     {
       get_args (f, &arg[0], 2);
-      seek (arg[0], (unsigned) arg[1]); // Void value, so no f->eax.
+      seek (arg[0], (unsigned) arg[1]);
       break;
-    }
-
+    } 
+  
     case SYS_TELL:
     {
       get_args (f, &arg[0], 1);
@@ -125,7 +122,7 @@ syscall_handler (struct intr_frame *f UNUSED)
     }
 
     case SYS_CLOSE:
-    {
+    { 
       get_args (f, &arg[0], 1);
       close (arg[0]);
       break;
@@ -133,214 +130,275 @@ syscall_handler (struct intr_frame *f UNUSED)
   }
 }
 
-/* The descriptions of functions halt, exit, exec, wait, create, remove,
-   open, filesize, read, write, seek, tell and close are taken from
-   Project 2's webpage. */
-
-/* Terminates Pintos. */
+/* Terminates Pintos by calling shutdown_power_off() (declared in 
+   devices/shutdown.h). This should be seldom used, because you lose 
+   some information about possible deadlock situations, etc. */
 void
 halt (void)
-{ 
+{
   shutdown_power_off ();
 }
 
-/* Terminates the current user program, returning status to 
-   the kernel. If the process's parent waits for it, this is 
-   the status that will be returned. Conventionally, a status 
-   of 0 indicates success and nonzero values indicate errors. */
+/* Terminates the current user program, returning status to the kernel. 
+   If the process's parent waits for it (see below), this is the status 
+   that will be returned. Conventionally, a status of 0 indicates success 
+   and nonzero values indicate errors. */
 void 
 exit (int status)
 {
-  if (thread_alive (thread_current ()->parent))
-    thread_current ()->cp->status = status;
+  struct thread *t = thread_current ();
+  struct info_thread *info = t->info;
+  struct info_thread *tmp;
+  struct list_elem *e = list_begin (&info->children_list);  
+  struct process_file *free_f;
+  
+  printf ("%s: exit(%d)\n", t->name, status); 
 
-  printf ("%s: exit(%d)\n", thread_current ()->name, status);
+  while (e != list_end (&info->children_list))
+  {
+    tmp = list_entry (e, struct info_thread, elem);
+    tmp->parent_alive = false;
+    if (!tmp->alive)
+    {
+      e = list_remove (&tmp->elem);
+      free (tmp);
+    }
+    else
+      e = list_next (e);
+  }
+
+  if (info->parent_alive)
+  {
+    info->alive = false;
+    info->exit = status;
+    sema_up (&info->sema_wait);
+  }
+  else
+  {
+    list_remove (&info->elem);
+    free (info);
+  }
+
+  /* Free files. */
+  e = list_begin (&t->files_list);
+  while (e != list_end (&t->files_list))
+  {
+    free_f = list_entry (e, struct process_file, elem);
+    file_close (free_f->file);
+    e = list_remove (&free_f->elem);
+    free (free_f);
+  }
+  
   thread_exit ();
 }
 
-/* Runs the executable whose name is given in cmd_line, passing 
-   any given arguments, and returns the new process's program id 
-   (pid). Must return pid -1, which otherwise should not be a valid 
-   pid, if the program cannot load or run for any reason. Thus, 
-   the parent process cannot return from the exec until it knows 
-   whether the child process successfully loaded its executable. */
+/* Runs the executable whose name is given in cmd_line, passing any 
+   given arguments, and returns the new process's program id (pid). 
+   Must return pid -1, which otherwise should not be a valid pid, if 
+   the program cannot load or run for any reason. Thus, the parent 
+   process cannot return from the exec until it knows whether the child 
+   process successfully loaded its executable. */
 pid_t
 exec (const char *cmd_line)
 {
+  if (!is_valid_ptr ((void *) cmd_line))
+    exit (ERROR);
   pid_t pid = process_execute (cmd_line);
-  struct child_process *cp = get_child_process (pid);
-
-  if (cp == NULL)
-    return ERROR; 
-
-  while (cp->load_status == 0) // 0 = not loaded.
-  {
-    // busy waiting
-    barrier (); /* Re-checks condition. */
-  }
-  if (cp->load_status == -1) // -1 = load fail.
-    return ERROR;
-
   return pid;
 }
 
 /* Waits for a child process pid and retrieves the child's exit status.
-   If pid is still alive, waits until it terminates. Then, returns 
-   the status that pid passed to exit. If pid did not call exit(), 
-   but was terminated by the kernel (e.g. killed due to an exception), 
-   wait(pid) must return -1. */
-int 
+   If pid is still alive, waits until it terminates. Then, returns the 
+   status that pid passed to exit. If pid did not call exit(), but was 
+   terminated by the kernel (e.g. killed due to an exception), wait(pid) 
+   must return -1. */
+int
 wait (pid_t pid)
 {
-  return process_wait (pid);
+  pid_t ret = process_wait (pid);
+  return ret;
 }
 
-/* From this point, we enter file system calls.
-   To protect the files from race conditions, we use a lock. */
-
-/* Creates a new file called file initially initial_size bytes 
-   in size. Returns true if successful, false otherwise. */
+/* Creates a new file called file initially initial_size bytes in size. 
+   Returns true if successful, false otherwise. Creating a new file 
+   does not open it: opening the new file is a separate operation 
+   which would require a open system call. */
 bool
 create (const char *file, unsigned initial_size)
 {
-  lock_acquire (&sys_lock);
-  bool success = filesys_create (file, initial_size);
-  lock_release (&sys_lock);
-  return success;
+  int ret;
+  if (file == NULL)
+    exit (ERROR);
+
+  if (!is_valid_ptr ((void *) file))
+    exit (ERROR);
+
+  lock_acquire (&syslock);
+  ret = filesys_create (file, initial_size);
+  lock_release (&syslock);
+  return ret;
 }
 
-/* Deletes the file called file. Returns true if successful, 
-   false otherwise. A file may be removed regardless of whether 
-   it is open or closed, and removing an open file does not close it. */
+/* Deletes the file called file. Returns true if successful, false 
+   otherwise. A file may be removed regardless of whether it is open 
+   or closed, and removing an open file does not close it. */
 bool
 remove (const char *file)
 {
-  lock_acquire (&sys_lock);
-  bool success = filesys_remove (file);
-  lock_release (&sys_lock);
-  return success;
+  bool ret;
+   
+  lock_acquire (&syslock);
+  ret = filesys_remove (file);
+  lock_release (&syslock);
+
+  return ret; 
 }
 
-/* Opens the file called file. Returns a nonnegative integer 
-   handle called a "file descriptor" (fd), or -1 if the file could 
-   not be opened. */
+/* Opens the file called file. Returns a nonnegative integer handle 
+   called a "file descriptor" (fd), or -1 if the file could not be opened.
+   File descriptors numbered 0 and 1 are reserved for the console: 
+   fd 0 (STDIN_FILENO) is standard input, fd 1 (STDOUT_FILENO) is 
+   standard output. The open system call will never return either of 
+   these file descriptors, which are valid as system call arguments only 
+   as explicitly described below. */
 int
 open (const char *file)
 {
-  lock_acquire (&sys_lock);
-  struct file *f = filesys_open (file);
-  int fd;
+  struct thread *t = thread_current ();
+  struct process_file *pf = (struct process_file *) malloc
+                            (sizeof (struct process_file));
 
-  if (f != NULL) // If the file we are trying to open exists. 
-    fd = add_file (f);
-  else
-    fd = ERROR; // The file does not exist: error. 
+  if (!is_valid_ptr ((void *) file))
+    exit (ERROR);
 
-  lock_release (&sys_lock);
-  return fd;
+  if (file == NULL)
+  { 
+    free (pf);
+    return ERROR;
+  }
+
+  lock_acquire (&syslock);
+  pf->file = filesys_open (file);
+  lock_release (&syslock);
+
+  if (pf->file == NULL)
+  {
+    free (pf);
+    return ERROR;
+  }
+
+  pf->fd = (t->fd)++;
+
+  list_push_back (&t->files_list, &pf->elem);
+  return pf->fd;
 }
 
 /* Returns the size, in bytes, of the file open as fd. */
 int
 filesize (int fd)
 {
-  lock_acquire (&sys_lock);
-  int size;
-  struct file *f = get_file (fd);
-
-  if (f != NULL)
-    size = file_length (f);
-  else
-    size = ERROR; 
+  struct process_file *pf;
   
-  lock_release (&sys_lock);
+  if (get_file (fd, &pf) < 0)
+    return ERROR;
+  return file_length (pf->file);
+}
+
+/* Reads size bytes from the file open as fd into buffer. Returns the 
+   number of bytes actually read (0 at end of file), or -1 if the file 
+   could not be read (due to a condition other than end of file). Fd 0 
+   reads from the keyboard using input_getc(). */
+int
+read (int fd, void *buffer, unsigned size)
+{
+  struct process_file *pf;
+  unsigned i;
+  uint8_t *local_buffer = (uint8_t *) buffer;
+
+  if (buffer == NULL)
+    return ERROR;
+
+  if (!is_valid_buffer (buffer, size))
+    return ERROR;
+
+  if (fd == STDIN)
+  {
+    for (i = 0; i < size; i++)
+      local_buffer[i] = input_getc (); 
+    return size;
+  }
+ 
+  else if (fd == STDOUT)
+    return ERROR;
+
+  if (get_file (fd, &pf))
+    return ERROR;
+
+  lock_acquire (&syslock);
+  size = file_read (pf->file, buffer, size);
+  lock_release (&syslock);
   return size;
 }
 
-/* Reads size bytes from the file open as fd into buffer. Returns
-   the number of bytes actually read (0 at end of file), or -1 if
-   the file could not be read (due to a condition other than end 
-   of file). */
-int 
-read (int fd, void *buffer, unsigned size)
-{
-  if (fd == STDIN_FILENO)
-  {
-    unsigned i;
-    uint8_t *local_buffer = (uint8_t *) buffer;
-    for (i = 0; i < size; i++)
-    {
-      local_buffer[i] = input_getc ();
-    }
-    return size;
-  }
-  
-  lock_acquire (&sys_lock);
-  struct file *f = get_file (fd);
-  int b;
-  
-  if (f != NULL)
-    b = file_read (f, buffer, size);
-  else
-    b = ERROR;
-
-  lock_release (&sys_lock);
-  return b;
-}
-
 /* Writes size bytes from buffer to the open file fd. Returns the 
-   number of bytes actually written, which may be less than size
-   if some bytes could not be written. */
+   number of bytes actually written, which may be less than size if some 
+   bytes could not be written. */
 int
 write (int fd, const void *buffer, unsigned size)
-{
-  if (fd == STDOUT_FILENO)
+{ 
+  struct process_file *pf;
+
+  if (buffer == NULL)
+    return ERROR;
+
+  if (!is_valid_buffer ((void *) buffer, size))
+    exit (ERROR);
+
+  if (fd == STDOUT)
   {
-    putbuf (buffer, size);
+    putbuf ((char *) buffer, size);
     return size;
   }
-
-  lock_acquire (&sys_lock);
-  struct file *f = get_file (fd);
-  int b;
   
-  if (f != NULL)
-    b = file_write (f, buffer, size);
-  else
-    b = ERROR;
+  else if (fd == STDIN)
+    return ERROR;
 
-  lock_release (&sys_lock);
-  return b;
+  if (get_file (fd, &pf) < 0)
+    return ERROR;
+
+  lock_acquire (&syslock);
+  size = file_write (pf->file, buffer, size);
+  lock_release (&syslock);
+  return size;
 }
 
-/* Changes the next byte to be read or written in open file fd 
-   to position, expressed in bytes from the beginning of the file. 
-  (Thus, a position of 0 is the file's start.) */
+/* Changes the next byte to be read or written in open file fd to 
+   position, expressed in bytes from the beginning of the file. 
+   (Thus, a position of 0 is the file's start.) */
 void
 seek (int fd, unsigned position)
 {
-  lock_acquire (&sys_lock);
-  struct file *f = get_file (fd);
-  if (f != NULL)
-    file_seek (f, position);
-  lock_release (&sys_lock);
+  struct process_file *pf;
+  if (!get_file (fd, &pf))
+  {
+    lock_acquire (&syslock);
+    file_seek (pf->file, position);
+    lock_release (&syslock);
+  }
 }
 
 /* Returns the position of the next byte to be read or written in 
    open file fd, expressed in bytes from the beginning of the file. */
-unsigned
+unsigned 
 tell (int fd)
 {
-  lock_acquire (&sys_lock);
-  struct file *f = get_file (fd);
-  off_t offset;
-  if (f != NULL)
-    offset = file_tell (f);
-  else
-    offset = ERROR;
+  int position = ERROR;
+  struct process_file *pf;
 
-  lock_release (&sys_lock);
-  return offset;
+  if (!get_file (fd, &pf))
+    position = file_tell (pf->file);
+
+  return position;
 }
 
 /* Closes file descriptor fd. Exiting or terminating a process 
@@ -349,114 +407,90 @@ tell (int fd)
 void
 close (int fd)
 {
-  lock_acquire (&sys_lock);
-  close_file (fd);
-  lock_release (&sys_lock);
-}
+  struct process_file *pf;
 
-/* Checks whether the virtual address VADDR is a user virtual address
-   and is not situated before the beginning of the code segment. If 
-   one of this condition is not satisfied, call exit. */
-void
-is_valid_ptr (const void *vaddr)
-{
-  if (is_user_vaddr (vaddr) == false || vaddr < ((void *) 0x08048000))
-    exit (ERROR);
-}
-
-/* Converts a user virtual address to a kernel virtual address. */
-int user_to_kernel_ptr (const void *vaddr)
-{
-  is_valid_ptr (vaddr);
-  void *ptr = pagedir_get_page (thread_current ()->pagedir, vaddr);
-
-  if (ptr == NULL)
-    exit (ERROR);
-
-  return (int) ptr;
-}
-
-/* Add a new file to the list of files of the current thread, and
-   updates the file descriptor accordingly. */
-int 
-add_file (struct file *f)
-{
-  /* Allocate memory for a new file to add to the list. */
-  struct process_file *pf = malloc (sizeof (struct process_file));
-  pf->file = f;
-  pf->fd = thread_current ()->fd; // "Assign" fd number (used to identify).
- 
- /* Increments the thread's file descriptor. */
-  thread_current ()->fd = thread_current ()->fd + 1; 
-  list_push_back (&thread_current ()->file_list, &pf->elem);
-  return pf->fd;
-}
-
-/* Given a file descriptor number, returns the corresponding file 
-   in the current thread's list of files. If no such file is found, 
-   return NULL. */
-struct file *
-get_file (int fd)
-{
-  struct list_elem *e = list_begin (&thread_current ()->file_list);
-
-  /* Iterates through the file list until the file corresponding
-     to the file descriptor given in parameter is found or until
-     all the list elements have been checked. */
-  while (e != list_end (&thread_current ()->file_list))
+  if (get_file (fd, &pf) == SUCCESS)
   {
-    struct process_file *pf = list_entry (e, struct process_file, elem);
+    lock_acquire (&syslock);
+    file_close (pf->file);
+    lock_release (&syslock);
+    list_remove (&pf->elem);
+    free (pf);
+  }
+}
+
+/* Finds the file in the current thread's open files files_list 
+   that has a file descriptor equal to FD. If such a file exists,
+   associates its process_file structure to P and returns SUCCESS.
+   If not, returns ERROR.
+ */
+int
+get_file (int fd, struct process_file **p)
+{
+  struct thread *t = thread_current ();
+  struct list_elem *e = list_begin (&t->files_list);
+  struct process_file *pf;  
+
+  while (e != list_end (&t->files_list))
+  {
+    pf = list_entry (e, struct process_file, elem);
     if (pf->fd == fd)
-      return pf->file;
+    {
+      *p = pf;
+      return SUCCESS;
+    }
     e = list_next (e);
   }
-  return NULL; // If the file has not been found, return NULL.
+  return ERROR;
 }
 
-/* Given a file descriptor number, find the corresponding file in
-   the current thread's list of files and close it. If no such file
-   is found, nothing happens. */
-void 
-close_file (int fd)
+/* Returns true if the pointer PTR is in user space and is mapped
+   to a page. If one of those conditions is not satisfied, returns
+   false. */
+bool
+is_valid_ptr (void *ptr)
 {
-  struct list_elem *e = list_begin (&thread_current ()->file_list);
-  /* Used to iterate through the next element if e is removed. */
-  struct list_elem *next; 
+  if (!is_user_vaddr (ptr))
+    return false;
 
-  while (e != list_end (&thread_current ()->file_list))
-  {
-    struct process_file *pf = list_entry (e, struct process_file, elem);
-    next = list_next (e); // In case e would be removed right after.
-    
-    /* fd = -1 means that we want to close all the files (in case of 
-       an exit, for example). */
-    if (pf->fd == fd || fd == -1)
-    {
-      file_close (pf->file);
-      list_remove (&pf->elem);
-      /* Free the memory that had been allocated during add_file. */
-      free (pf);
+  if (pagedir_get_page (thread_current ()->pagedir, ptr) == NULL)
+    return false;
 
-      /* If we don't want to close all the files (fd != -1), we don't 
-         need to keep on iterating through the list, as we have just 
-         closed the file we wanted to close. We can break at this point. */       
-      if (fd != -1)
-        break;
-    }
-    e = next;
-  }
+  return true;
 }
 
-/* Gets argument from the stack. */
+/* Returns true if the buffer BUFFER is in user space and mapped
+   to a page. If one of those conditions is not satisfied, returns
+   false. */
+bool
+is_valid_buffer (void *buffer, int size)
+{
+  int i;
+  void *tmp = buffer;
+  uint32_t *pagedir = thread_current ()->pagedir;
+  for (i = 0; i < size - 1; i++)
+  {
+    tmp++;
+    if (!is_valid_ptr (tmp))
+      return false;
+    if (pagedir_get_page (pagedir, tmp) == NULL)
+      return false;
+  }
+  return true;
+}
+
+/* Gets the arguments from the stack and saves them into the array ARG. */
 void
 get_args (struct intr_frame *f, int *arg, int n)
 {
-  int i; 
+  int i;
   int *ptr;
+ 
   for (i = 0; i < n; i++)
   {
-    ptr = (int *) f->esp + i + 1;
-    is_valid_ptr ((const void *) ptr);
-    arg[i] = *ptr;
+    ptr = (int *) f->esp + i + 1; /* Get the argument. */
+    if (!is_valid_ptr ((void *) ptr)) /* Check if it is a valid address. */
+      exit (ERROR); /* If not, exit with an error. */
+    arg[i] = *ptr;  
   }
 }

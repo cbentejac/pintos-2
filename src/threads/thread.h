@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "threads/synch.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -102,15 +103,12 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
-
-    /* For file system calls. */
-    struct list file_list;
-    int fd;
-  
-    /* For other system calls. */
-    struct list children_list;
-    struct child_process *cp;
-    tid_t parent; 
+   
+    struct list files_list;             /* Open files list. */
+    int fd;                             /* File descriptor. */
+    struct semaphore sema_wait;         /* Semaphore for waiting. */
+    struct info_thread *info;           /* Pointer of info_thread struct. */
+    struct file *executable;            /* Open executable. */
 #endif
 
     /* Owned by thread.c. */
@@ -125,6 +123,35 @@ struct thread
     struct lock *lock_to_acquire;      /* Lock the thread is waiting for. */
     struct list_elem donor;            /* List element for the priority donors. */
   };
+
+/* Information about a file opened by a process. */
+struct process_file
+{
+  struct file *file;                   /* File. */ 
+  int fd;                              /* File descriptor associated
+                                          to the file. */
+  struct list_elem elem;               /* List element. */
+};
+
+/* Information about a thread. The structure exists even after a 
+   thread's death. */
+struct info_thread
+{
+  int tid;                             /* Thread's TID. */
+  bool parent_alive;                   /* Is the parent alive? */
+  struct list children_list;           /* List of children threads
+                                          (the threads are not actually
+                                          pushed, but their info_thread
+                                          structure is. */
+  bool alive;                          /* If the thread alive? */
+  int exit;                            /* Thread's exit status. */
+  struct list_elem elem;               /* List element. */
+  bool wait;                           /* Has the thread waited at least
+                                          once ? */
+  struct semaphore sema_wait;          /* Semaphore for wait(). */
+  bool load_status;                    /* Loading status. */
+  struct semaphore sema_load;          /* Semaphore for load(). */
+};
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
@@ -172,6 +199,4 @@ void priority_donation (void);
 void update_priority (void);
 void remove_donor (struct lock *lock);
 
-/* Functions added for system calls implementation. */
-bool thread_alive (int pid);
 #endif /* threads/thread.h */

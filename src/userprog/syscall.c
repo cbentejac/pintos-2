@@ -13,10 +13,10 @@
 #include "userprog/pagedir.h"
 
 static void syscall_handler (struct intr_frame *);
-int get_file (int fd, struct process_file **p);
+struct lock syslock; /* Lock for file system calls. */
+bool get_file (int fd, struct process_file **p);
 bool is_valid_ptr (void *ptr);
 bool is_valid_buffer (void *buffer, int size);
-struct lock syslock;
 void get_args (struct intr_frame *f, int *arg, int n);
 
 void
@@ -150,15 +150,18 @@ exit (int status)
   struct info_thread *info = t->info;
   struct info_thread *tmp;
   struct list_elem *e = list_begin (&info->children_list);  
-  struct process_file *free_f;
+  struct process_file *free_f; /* Used to free files allocated. */
   
   printf ("%s: exit(%d)\n", t->name, status); 
 
+  /* Updates info_thread parent's status for every child thread (info_thread 
+     structure) in the children list. If a child is not alive anymore, remove
+     it from the children list and free it. */
   while (e != list_end (&info->children_list))
   {
     tmp = list_entry (e, struct info_thread, elem);
     tmp->parent_alive = false;
-    if (!tmp->alive)
+    if (!tmp->alive) 
     {
       e = list_remove (&tmp->elem);
       free (tmp);
@@ -167,6 +170,7 @@ exit (int status)
       e = list_next (e);
   }
 
+  /* If the parent of the current thread is still alive, die. */
   if (info->parent_alive)
   {
     info->alive = false;
@@ -179,7 +183,7 @@ exit (int status)
     free (info);
   }
 
-  /* Free files. */
+  /* Free files after closing them. */
   e = list_begin (&t->files_list);
   while (e != list_end (&t->files_list))
   {
@@ -203,8 +207,7 @@ exec (const char *cmd_line)
 {
   if (!is_valid_ptr ((void *) cmd_line))
     exit (ERROR);
-  pid_t pid = process_execute (cmd_line);
-  return pid;
+  return (pid_t) process_execute (cmd_line);
 }
 
 /* Waits for a child process pid and retrieves the child's exit status.
@@ -215,8 +218,7 @@ exec (const char *cmd_line)
 int
 wait (pid_t pid)
 {
-  pid_t ret = process_wait (pid);
-  return ret;
+  return (int) process_wait (pid);
 }
 
 /* Creates a new file called file initially initial_size bytes in size. 
@@ -226,15 +228,11 @@ wait (pid_t pid)
 bool
 create (const char *file, unsigned initial_size)
 {
-  int ret;
-  if (file == NULL)
-    exit (ERROR);
-
-  if (!is_valid_ptr ((void *) file))
+  if (file == NULL || !is_valid_ptr ((void *) file))
     exit (ERROR);
 
   lock_acquire (&syslock);
-  ret = filesys_create (file, initial_size);
+  int ret = filesys_create (file, initial_size);
   lock_release (&syslock);
   return ret;
 }
@@ -245,10 +243,8 @@ create (const char *file, unsigned initial_size)
 bool
 remove (const char *file)
 {
-  bool ret;
-   
   lock_acquire (&syslock);
-  ret = filesys_remove (file);
+  bool ret = filesys_remove (file);
   lock_release (&syslock);
 
   return ret; 
@@ -268,13 +264,10 @@ open (const char *file)
   struct process_file *pf = (struct process_file *) malloc
                             (sizeof (struct process_file));
 
-  if (!is_valid_ptr ((void *) file))
-    exit (ERROR);
-
-  if (file == NULL)
+  if (file == NULL || !is_valid_ptr ((void *) file))
   { 
     free (pf);
-    return ERROR;
+    exit (ERROR);
   }
 
   lock_acquire (&syslock);
@@ -284,12 +277,14 @@ open (const char *file)
   if (pf->file == NULL)
   {
     free (pf);
-    return ERROR;
+    return (ERROR);
   }
 
-  pf->fd = (t->fd)++;
+  pf->fd = t->fd; /* Initializes the file's file descriptor. */
+  t->fd++; /* Increments the thread's file descriptor ("counter"). */
 
-  list_push_back (&t->files_list, &pf->elem);
+  /* Add the file to the opened files_list. */
+  list_push_back (&t->files_list, &pf->elem); 
   return pf->fd;
 }
 
@@ -299,8 +294,8 @@ filesize (int fd)
 {
   struct process_file *pf;
   
-  if (get_file (fd, &pf) < 0)
-    return ERROR;
+  if (get_file (fd, &pf))
+    exit (ERROR);
   return file_length (pf->file);
 }
 
@@ -315,12 +310,10 @@ read (int fd, void *buffer, unsigned size)
   unsigned i;
   uint8_t *local_buffer = (uint8_t *) buffer;
 
-  if (buffer == NULL)
+  if (buffer == NULL || !is_valid_buffer (buffer, size))
     return ERROR;
 
-  if (!is_valid_buffer (buffer, size))
-    return ERROR;
-
+  /* Fd 0: reads from the keyboard. */
   if (fd == STDIN)
   {
     for (i = 0; i < size; i++)
@@ -328,10 +321,7 @@ read (int fd, void *buffer, unsigned size)
     return size;
   }
  
-  else if (fd == STDOUT)
-    return ERROR;
-
-  if (get_file (fd, &pf))
+  else if (fd == STDOUT || get_file (fd, &pf))
     return ERROR;
 
   lock_acquire (&syslock);
@@ -348,10 +338,7 @@ write (int fd, const void *buffer, unsigned size)
 { 
   struct process_file *pf;
 
-  if (buffer == NULL)
-    return ERROR;
-
-  if (!is_valid_buffer ((void *) buffer, size))
+  if (buffer == NULL || !is_valid_buffer ((void *) buffer, size))
     exit (ERROR);
 
   if (fd == STDOUT)
@@ -360,11 +347,8 @@ write (int fd, const void *buffer, unsigned size)
     return size;
   }
   
-  else if (fd == STDIN)
-    return ERROR;
-
-  if (get_file (fd, &pf) < 0)
-    return ERROR;
+  else if (fd == STDIN || get_file (fd, &pf))
+    exit (ERROR);
 
   lock_acquire (&syslock);
   size = file_write (pf->file, buffer, size);
@@ -392,7 +376,9 @@ seek (int fd, unsigned position)
 unsigned 
 tell (int fd)
 {
-  int position = ERROR;
+  /* We initialize the position with ERROR (-1) because we need to return
+     it, even if get_file returns more than 0. */
+  int position = ERROR; 
   struct process_file *pf;
 
   if (!get_file (fd, &pf))
@@ -409,7 +395,7 @@ close (int fd)
 {
   struct process_file *pf;
 
-  if (get_file (fd, &pf) == SUCCESS)
+  if (!get_file (fd, &pf)) 
   {
     lock_acquire (&syslock);
     file_close (pf->file);
@@ -424,7 +410,7 @@ close (int fd)
    associates its process_file structure to P and returns SUCCESS.
    If not, returns ERROR.
  */
-int
+bool
 get_file (int fd, struct process_file **p)
 {
   struct thread *t = thread_current ();
@@ -450,10 +436,9 @@ get_file (int fd, struct process_file **p)
 bool
 is_valid_ptr (void *ptr)
 {
-  if (!is_user_vaddr (ptr))
-    return false;
+  uint32_t *pagedir = thread_current ()->pagedir;
 
-  if (pagedir_get_page (thread_current ()->pagedir, ptr) == NULL)
+  if (!is_user_vaddr (ptr) || pagedir_get_page (pagedir, ptr) == NULL)
     return false;
 
   return true;
@@ -468,12 +453,11 @@ is_valid_buffer (void *buffer, int size)
   int i;
   void *tmp = buffer;
   uint32_t *pagedir = thread_current ()->pagedir;
+
   for (i = 0; i < size - 1; i++)
   {
     tmp++;
-    if (!is_valid_ptr (tmp))
-      return false;
-    if (pagedir_get_page (pagedir, tmp) == NULL)
+    if (!is_valid_ptr (tmp) || pagedir_get_page (pagedir, tmp) == NULL)
       return false;
   }
   return true;

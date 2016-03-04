@@ -24,7 +24,7 @@ static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), 
                   void **esp, char **save_ptr);
 struct info_thread *get_child_by_tid (tid_t child_tid);
-struct file *f = NULL;
+struct file *f;
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -56,7 +56,7 @@ process_execute (const char *file_name)
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (fn, PRI_DEFAULT, start_process, fn_copy);
 
-  palloc_free_page (fn);
+  palloc_free_page (fn); /* Free fn's page. */
 
   if (tid == TID_ERROR)
   {
@@ -101,7 +101,7 @@ start_process (void *file_name_)
   {
     palloc_free_page (file_name);
     sema_up (&thread_current ()->info->sema_load);
-    exit (-1);
+    exit (ERROR);
   }
 
   sema_up (&thread_current ()->info->sema_load);
@@ -529,6 +529,7 @@ setup_stack_helper (const char *file_name, char **save_ptr,
   void **uarg = malloc (size * sizeof (void *)); 
   char *karg; 
   bool success = true;
+  int length = 0;
 
   /* Place the words at the top of the stack (order doesn't matter). */
   for (token = (char *) file_name; token != NULL;
@@ -542,6 +543,7 @@ setup_stack_helper (const char *file_name, char **save_ptr,
     ASSERT (is_user_vaddr (uarg[argc]));
 
     argc++;
+    length += strlen (token) + 1;
 
     /* If uarg is full, resize it. */
     if (argc >= size)
@@ -551,10 +553,13 @@ setup_stack_helper (const char *file_name, char **save_ptr,
     } 
   }
 
-  /* TODO 
-   * Align words for faster access (multiple of 4). 
-   */
-
+  /* Align words for faster access (multiple of 4). */
+  uint32_t align = 0;
+  for (length = length % 4; length != 0; length--)
+  {
+    if (push (kpage, &ofs, &align, sizeof (align)) == NULL)
+      success = false;
+  }
 
   /* Null pointer to push between the words and their addresses. */
   uarg[argc] = 0; 

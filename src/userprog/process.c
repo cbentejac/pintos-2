@@ -554,10 +554,9 @@ setup_stack_helper (const char *file_name, char **save_ptr,
   }
 
   /* Align words for faster access (multiple of 4). */
-  uint32_t align = 0;
   for (length = length % 4; length != 0; length--)
   {
-    if (push (kpage, &ofs, &align, sizeof (align)) == NULL)
+    if (push (kpage, &ofs, &null, sizeof (null)) == NULL)
       success = false;
   }
 
